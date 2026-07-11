@@ -5,31 +5,33 @@ import subprocess
 import time
 import mysql.connector
 import os
+from dotenv import load_dotenv
 
 class Daemon:
     def __init__(self, db_config):
         self.db_config = db_config
 
-    def db_connect(self):
-        """Establish a connection to the MySQL database."""
+    def get_db_connection(self):
+        """Establish a fresh connection to the MySQL database."""
         try:
-            self.connection = mysql.connector.connect(**self.db_config)
-            self.cursor = self.connection.cursor()
-            print("Database connection established.")
+            connection = mysql.connector.connect(**self.db_config)
+            return connection
         except mysql.connector.Error as err:
-            print(f"Error: {err}")
-            self.connection = None
-            self.cursor = None
+            print(f"Database Connection Error: {err}")
+            return None
     
     def user_exists(self, username):
         """Check if a user exists in the database."""
-        result = subprocess.run(['id', '-u', username], output=True, text=True)
+        result = subprocess.run(['id', '-u', username], capture_output=True, text=True)
         return result.returncode == 0
 
     def reconcile_users(self):
         """Compares the database blueprint against the live OS and fixes drift."""
         print("Starting user reconciliation cycle...")
         conn = self.get_db_connection()
+        if not conn:
+            return
+            
         cursor = conn.cursor(dictionary=True)
         
         # Fetch the master blueprint
@@ -65,7 +67,6 @@ class Daemon:
         cursor.close()
         conn.close()
 
-
     def get_crontab(self, system_user):
         """Fetches the current crontab for a specific user."""
         # 'crontab -l' lists the current cron jobs
@@ -84,10 +85,13 @@ class Daemon:
         """Compares the database blueprint against the live OS and fixes drift for tasks."""
         print("Starting task reconciliation cycle...")
         conn = self.get_db_connection()
+        if not conn:
+            return
+            
         cursor = conn.cursor(dictionary=True)
         
         # Fetch the master blueprint for tasks
-        cursor.execute("SELECT task_name, expected_state FROM SystemTasks")
+        cursor.execute("SELECT task_name, cron_expression, command_to_run, run_as_user, expected_state FROM ScheduledTasks")
         desired_tasks = cursor.fetchall()
         
         for task in desired_tasks:
@@ -98,7 +102,6 @@ class Daemon:
             # The exact string we expect to see in the Linux crontab
             cron_line = f"{task['cron_expression']} {task['command_to_run']} # MANAGED BY DAEMON: {task_name}"
 
-
             # Check if the task is present in the user's crontab
             current_crontab = self.get_crontab(run_as)
             is_present = cron_line in current_crontab
@@ -108,7 +111,7 @@ class Daemon:
                 print(f"Drift detected: Creating missing task '{task_name}'")
                 new_crontab = current_crontab + f"\n{cron_line}\n"
                 self.set_crontab(run_as, new_crontab)
-                print(f"Success: '{task_name}' created.")
+                print(f"Success: '{task_name}' scheduled.")
 
             # Scenario 2: Task is revoked in DB, but still on the system (Drift: Unauthorized access)
             elif expected_state == 'absent' and is_present:
@@ -116,7 +119,7 @@ class Daemon:
 
                 # Filter out the specific line using a quick list comprehension
                 cleaned_crontab = "\n".join(line for line in current_crontab.splitlines() if task_name not in line)
-                new_crontab = "\n".join(cleaned_lines) + "\n"
+                new_crontab = cleaned_crontab + "\n"
 
                 self.set_crontab(run_as, new_crontab)
                 print(f"Success: '{task_name}' removed.")
@@ -124,7 +127,7 @@ class Daemon:
         cursor.close()
         conn.close()
 
-    def run_forever(self, interval=60) :
+    def run_forever(self, interval=60):
         """Run the reconciliation process indefinitely at specified intervals."""
         while True:
             try:
@@ -136,7 +139,7 @@ class Daemon:
             time.sleep(interval)
 
 if __name__ == "__main__":
-    load_dotnev()   # Load environment variables from .env file
+    load_dotenv()   # Load environment variables from .env file
 
     db_config = {
         "host": os.getenv("DB_HOST", "localhost"), # Fallback to localhost if missing
@@ -146,11 +149,11 @@ if __name__ == "__main__":
     }
 
     # safety check before starting the infinite loop
-    if not all([db_settings['user'], db_settings['password'], db_settings['database']]):
+    if not all([db_config['user'], db_config['password'], db_config['database']]):
         print("CRITICAL ERROR: Missing database credentials in .env file.")
         exit(1)
         
     print("Initializing Infrastructure Daemon...")
 
-    daemon = Processor(db_config)
+    daemon = Daemon(db_config)
     daemon.run_forever(interval=300) # Runs every 5 minutes
