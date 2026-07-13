@@ -32,7 +32,7 @@ async def get_kpis():
     """Fetch KPIs from the database"""
     conn = get_db_connection()
     if not conn:
-        raise HTTPException(status_code=500, details="Database connection failed")
+        raise HTTPException(status_code=500, detail="Database connection failed")
     
     cursor = conn.cursor(dictionary=True)
 
@@ -60,11 +60,11 @@ async def get_kpis():
 
 @app.get("/api/logs")
 
-async def get_logs():
+async def get_logs(limit: int = 50):
     """Fetch logs from the database"""
     conn = get_db_connection()
     if not conn:
-        raise HTTPException(status_code=500, details="Database connection failed")
+        raise HTTPException(status_code=500, detail="Database connection failed")
     
     cursor = conn.cursor(dictionary=True)
 
@@ -83,7 +83,7 @@ async def get_logs():
         conn.close()
 
 
-@app.get("/api/data_charts")
+@app.get("/api/chart-data")
 
 async def get_data_charts():
     """Fetch data for charts from the database"""
