@@ -7,18 +7,15 @@ import mysql.connector
 import os
 from dotenv import load_dotenv
 
+from db import get_db_connection, get_db_config
+
 class Daemon:
     def __init__(self, db_config):
         self.db_config = db_config
 
     def get_db_connection(self):
         """Establish a fresh connection to the MySQL database."""
-        try:
-            connection = mysql.connector.connect(**self.db_config)
-            return connection
-        except mysql.connector.Error as err:
-            print(f"Database Connection Error: {err}")
-            return None
+        return get_db_connection(self.db_config)
     
     def user_exists(self, username):
         """Check if a user exists in the database."""
@@ -173,12 +170,7 @@ class Daemon:
 if __name__ == "__main__":
     load_dotenv()   # Load environment variables from .env file
 
-    db_config = {
-        "host": os.getenv("DB_HOST", "localhost"), # Fallback to localhost if missing
-        "user": os.getenv("DB_USER"),
-        "password": os.getenv("DB_PASSWORD"),
-        "database": os.getenv("DB_NAME")
-    }
+    db_config = get_db_config()
 
     # safety check before starting the infinite loop
     if not all([db_config['user'], db_config['password'], db_config['database']]):
