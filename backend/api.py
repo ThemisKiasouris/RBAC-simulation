@@ -2,6 +2,7 @@ import os
 from fastapi import FastAPI, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
+from pydantic import BaseModel, Field
 
 from db import get_db_connection
 
@@ -23,11 +24,11 @@ app.add_middleware(
 
 def get_user_role(cursor, username: str):
     """Helper to check if the requester is a manager or standard user."""
-    cursor.execute("SELECT dashboard_role FROM SystemUsers WHERE username = %s", (username,))
+    cursor.execute("SELECT d_role FROM SystemUsers WHERE username = %s", (username,))
     user = cursor.fetchone()
     if not user:
         raise HTTPException(status_code=401, detail="User not found in system")
-    return user['dashboard_role']
+    return user['d_role']
 
 
 @app.get("/api/kpis")
@@ -72,6 +73,64 @@ async def get_kpis(x_user: str = Header(default="root_admin")): # Simulating aut
             "active_tasks": task_count,
             "latest_errors": error_count
         }
+    finally:
+        cursor.close()
+        conn.close()
+
+
+class CreateUserPayload(BaseModel):
+    username: str = Field(min_length=3, max_length=32)
+    primary_group: str = Field(default="developers", min_length=1, max_length=64)
+    d_role: str = Field(default="user")
+    has_sudo: bool = False
+
+
+@app.post("/api/kpis/create-user")
+async def create_user(payload: CreateUserPayload, x_user: str = Header(default="root_admin")):
+    """Create a new system user. Managers only."""
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="Database connection failed")
+
+    cursor = conn.cursor(dictionary=True)
+
+    try:
+        role = get_user_role(cursor, x_user)
+        if role != 'manager':
+            raise HTTPException(status_code=403, detail="Forbidden. Managers only.")
+
+        normalized_role = payload.d_role.strip().lower()
+        if normalized_role not in {"manager", "user"}:
+            raise HTTPException(status_code=400, detail="d_role must be 'manager', or 'user'")
+        if normalized_role == "standard":
+            normalized_role = "user"
+
+        if payload.d_role != normalized_role:
+            payload.d_role = normalized_role
+
+        query = """
+            INSERT INTO SystemUsers (username, primary_group, has_sudo, expected_state, d_role)
+            VALUES (%s, %s, %s, %s, %s)
+        """
+        cursor.execute(
+            query,
+            (
+                payload.username,
+                payload.primary_group,
+                int(bool(payload.has_sudo)),
+                'present',
+                normalized_role
+            ),
+        )
+        conn.commit()
+
+        return {"message": f"User '{payload.username}' created successfully."}
+    except HTTPException:
+        conn.rollback()
+        raise
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Error creating user: {e}") from e
     finally:
         cursor.close()
         conn.close()
@@ -169,7 +228,7 @@ async def get_users(x_user: str = Header(default="root_admin")):
         if role != 'manager':
             raise HTTPException(status_code=403, detail="Forbidden. Managers only.")
             
-        cursor.execute("SELECT id, username, primary_group, has_sudo, dashboard_role, expected_state FROM SystemUsers")
+        cursor.execute("SELECT id, username, primary_group, has_sudo, d_role, expected_state FROM SystemUsers")
         return cursor.fetchall()
     finally:
         cursor.close()

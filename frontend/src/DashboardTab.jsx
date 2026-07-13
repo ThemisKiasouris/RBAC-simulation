@@ -35,6 +35,7 @@ export default function DashboardTab({ currentUser }) {
     <>
       {/* KPI Grid */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+        {/* Managed Entities */}
         <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 flex flex-col">
           <div className="flex items-center gap-2 text-slate-500 mb-4">
             <Users size={20} className="text-blue-500" />
@@ -42,13 +43,15 @@ export default function DashboardTab({ currentUser }) {
           </div>
           <p className="text-4xl font-bold text-slate-800">{loading ? '-' : kpis.managed_users}</p>
         </div>
+        {/*Active Tasks*/}
         <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 flex flex-col">
           <div className="flex items-center gap-2 text-slate-500 mb-4">
             <Activity size={20} className="text-emerald-500" />
-            <h3 className="font-semibold uppercase tracking-wider text-xs">My Active Tasks</h3>
+            <h3 className="font-semibold uppercase tracking-wider text-xs">Active Tasks</h3>
           </div>
           <p className="text-4xl font-bold text-slate-800">{loading ? '-' : kpis.active_tasks}</p>
         </div>
+        {/*Errors*/}
         <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 flex flex-col">
           <div className="flex items-center gap-2 text-slate-500 mb-4">
             <AlertTriangle size={20} className="text-rose-500" />

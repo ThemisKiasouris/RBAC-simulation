@@ -180,4 +180,4 @@ if __name__ == "__main__":
     print("Initializing Infrastructure Daemon...")
 
     daemon = Daemon(db_config)
-    daemon.run_forever(interval=60) # Set to 60 seconds for easier testing
+    daemon.run_forever(interval=100) # Set to 1 minute for easier testing
