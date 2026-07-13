@@ -52,10 +52,20 @@ class Daemon:
                 if user['has_sudo']:
                     cmd.extend(['-G', 'sudo'])
                 cmd.append(username)
+
+                cmd_string = " ".join(cmd)
                 
                 # Execute the fix
                 subprocess.run(cmd, check=True)
                 print(f"Success: '{username}' created.")
+
+                try:
+                    subprocess.run(cmd, check=True, output=True, text=True)
+                    print(f"Success: '{username}' created.")
+                    self.log_action('USER_CREATE', username, cmd_string, 'SUCCESS')
+                except subprocess.CalledProcessError as e:
+                    print(f"Error creating user '{username}': {e}")
+                    self.log_action('USER_CREATE', username, cmd_string, f'FAILURE: {e}')
 
             # Scenario 2: User is revoked in DB, but still on the system (Drift: Unauthorized access)
             elif expected_state == 'absent' and is_present:
@@ -126,6 +136,28 @@ class Daemon:
 
         cursor.close()
         conn.close()
+
+    def log_action(self, action_type, target_entity, details, status):
+        """Action record"""
+        conn = self.get_db_connection()
+
+        if not conn:
+            print("Failed to log action: Database connection could not be established.")
+            return
+        
+        try:
+            cursor = conn.cursor()
+            query = """ INSERT INTO AuditLogs (action_type, target_entity, details, status)
+                        VALUES (%s, %s, %s, %s)"""
+            cursor.execute(query, (action_type, target_entity, details, status))            
+            conn.commit()
+        except mysql.connector.Error as err:
+            print(f"Database Logging Error: {err}")
+        finally:
+            if 'cursor' in locals:
+                cursor.close()
+            conn.close() 
+    
 
     def run_forever(self, interval=60):
         """Run the reconciliation process indefinitely at specified intervals."""
