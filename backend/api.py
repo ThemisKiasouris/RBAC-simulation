@@ -2,7 +2,7 @@ import os
 from fastapi import FastAPI, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from db import get_db_connection
 
@@ -10,7 +10,7 @@ load_dotenv()
 
 app = FastAPI(
     title="Controller API",
-    description="RBAC-enabled API for controlling and monitoring a linux system",
+    description="RBAC-enabled API for controlling and monitoring the system",
     version="1.1.0",
 )
 
@@ -22,6 +22,26 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# --- Pydantic Models for Input Validation ---
+class UserCreate(BaseModel):
+    username: str
+    primary_group: str = 'users'
+    has_sudo: bool = False
+    shell_path: str = '/bin/bash'
+    d_role: str = 'user'
+
+class CreateTaskPayload(BaseModel):
+    task_name: str
+    cron_expression: str
+    command_to_run: str
+    run_as_user: str = "root"
+
+class UpdateTaskPayload(BaseModel):
+    cron_expression: str
+    command_to_run: str
+    run_as_user: str
+
+# --- Helpers ---
 def get_user_role(cursor, username: str):
     """Helper to check if the requester is a manager or standard user."""
     cursor.execute("SELECT d_role FROM SystemUsers WHERE username = %s", (username,))
@@ -30,21 +50,18 @@ def get_user_role(cursor, username: str):
         raise HTTPException(status_code=401, detail="User not found in system")
     return user['d_role']
 
-
+# --- KPI & Dashboard Endpoints ---
 @app.get("/api/kpis")
-async def get_kpis(x_user: str = Header(default="root_admin")): # Simulating authentication
-    """Fetch KPIs filtered by user role."""
+async def get_kpis(x_user: str = Header(default="root_admin")):
     conn = get_db_connection()
     if not conn:
         raise HTTPException(status_code=500, detail="Database connection failed")
     
     cursor = conn.cursor(dictionary=True)
-
     try:
         role = get_user_role(cursor, x_user)
 
         if role == 'manager':
-            # Manager sees EVERYTHING
             cursor.execute("SELECT count(*) as count FROM SystemUsers WHERE expected_state='present'")
             user_count = cursor.fetchone()['count']
 
@@ -54,13 +71,11 @@ async def get_kpis(x_user: str = Header(default="root_admin")): # Simulating aut
             cursor.execute("SELECT COUNT(*) as count FROM AuditLogs WHERE status = 'ERROR' AND timestamp >= NOW() - INTERVAL 1 DAY")
             error_count = cursor.fetchone()['count']
         else:
-            # Standard User sees only their stats
-            user_count = 1 # They only manage themselves
+            user_count = 1 
 
             cursor.execute("SELECT count(*) as count FROM ScheduledTasks WHERE expected_state='present' AND run_as_user = %s", (x_user,))
             task_count = cursor.fetchone()['count']
 
-            # Join AuditLogs to ScheduledTasks to only count errors for their tasks
             cursor.execute("""
                 SELECT COUNT(a.id) as count FROM AuditLogs a
                 JOIN ScheduledTasks s ON a.target_entity = s.task_name
@@ -77,74 +92,13 @@ async def get_kpis(x_user: str = Header(default="root_admin")): # Simulating aut
         cursor.close()
         conn.close()
 
-
-class CreateUserPayload(BaseModel):
-    username: str = Field(min_length=3, max_length=32)
-    primary_group: str = Field(default="developers", min_length=1, max_length=64)
-    d_role: str = Field(default="user")
-    has_sudo: bool = False
-
-
-@app.post("/api/kpis/create-user")
-async def create_user(payload: CreateUserPayload, x_user: str = Header(default="root_admin")):
-    """Create a new system user. Managers only."""
-    conn = get_db_connection()
-    if not conn:
-        raise HTTPException(status_code=500, detail="Database connection failed")
-
-    cursor = conn.cursor(dictionary=True)
-
-    try:
-        role = get_user_role(cursor, x_user)
-        if role != 'manager':
-            raise HTTPException(status_code=403, detail="Forbidden. Managers only.")
-
-        normalized_role = payload.d_role.strip().lower()
-        if normalized_role not in {"manager", "user"}:
-            raise HTTPException(status_code=400, detail="d_role must be 'manager', or 'user'")
-        if normalized_role == "standard":
-            normalized_role = "user"
-
-        if payload.d_role != normalized_role:
-            payload.d_role = normalized_role
-
-        query = """
-            INSERT INTO SystemUsers (username, primary_group, has_sudo, expected_state, d_role)
-            VALUES (%s, %s, %s, %s, %s)
-        """
-        cursor.execute(
-            query,
-            (
-                payload.username,
-                payload.primary_group,
-                int(bool(payload.has_sudo)),
-                'present',
-                normalized_role
-            ),
-        )
-        conn.commit()
-
-        return {"message": f"User '{payload.username}' created successfully."}
-    except HTTPException:
-        conn.rollback()
-        raise
-    except Exception as e:
-        conn.rollback()
-        raise HTTPException(status_code=500, detail=f"Error creating user: {e}") from e
-    finally:
-        cursor.close()
-        conn.close()
-
-
 @app.get("/api/logs")
 async def get_logs(limit: int = 50, x_user: str = Header(default="root_admin")):
-    """Fetch logs filtered by user role."""
     conn = get_db_connection()
     if not conn:
         raise HTTPException(status_code=500, detail="Database connection failed")
     
     cursor = conn.cursor(dictionary=True)
-
     try:
         role = get_user_role(cursor, x_user)
 
@@ -152,7 +106,6 @@ async def get_logs(limit: int = 50, x_user: str = Header(default="root_admin")):
             query = "SELECT id, timestamp, action_type, target_entity, details, status FROM AuditLogs ORDER BY timestamp DESC LIMIT %s"
             cursor.execute(query, (limit,))
         else:
-            # INNER JOIN ensures standard users only see logs where the target_entity matches their assigned tasks
             query = """
                 SELECT a.id, a.timestamp, a.action_type, a.target_entity, a.details, a.status 
                 FROM AuditLogs a
@@ -170,16 +123,13 @@ async def get_logs(limit: int = 50, x_user: str = Header(default="root_admin")):
         cursor.close()
         conn.close()
 
-
 @app.get("/api/chart-data")
 async def get_data_charts(x_user: str = Header(default="root_admin")):
-    """Fetch chart data filtered by user role."""
     conn = get_db_connection()
     if not conn:
         raise HTTPException(status_code=500, detail="Database connection failed")
         
     cursor = conn.cursor(dictionary=True)
-    
     try:
         role = get_user_role(cursor, x_user)
 
@@ -217,10 +167,10 @@ async def get_data_charts(x_user: str = Header(default="root_admin")):
         cursor.close()
         conn.close()
 
+# --- User Endpoints ---
 
 @app.get("/api/users")
 async def get_users(x_user: str = Header(default="root_admin")):
-    """Get list of system users. Managers only."""
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
     try:
@@ -234,20 +184,138 @@ async def get_users(x_user: str = Header(default="root_admin")):
         cursor.close()
         conn.close()
 
+@app.post("/api/users")
+async def create_user(user: UserCreate, x_user: str = Header(default="root_admin")):
+    """Create a new system user. Managers only."""
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    try:
+        role = get_user_role(cursor, x_user)
+        if role != 'manager':
+            raise HTTPException(status_code=403, detail="Forbidden. Managers only.")
+            
+        # Insert user into the blueprint database
+        cursor.execute(
+            "INSERT INTO SystemUsers (username, primary_group, has_sudo, shell_path, d_role) VALUES (%s, %s, %s, %s, %s)",
+            (user.username, user.primary_group, user.has_sudo, user.shell_path, user.d_role)
+        )
+        conn.commit()
+        return {"message": "User created successfully"}
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        cursor.close()
+        conn.close()
+
+# --- Task Endpoints ---
+
 @app.get("/api/tasks")
 async def get_tasks(x_user: str = Header(default="root_admin")):
-    """Get list of cron tasks. Role filtered."""
+    """Get list of cron tasks. Role filtered and only active tasks are returned."""
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
     try:
         role = get_user_role(cursor, x_user)
         
         if role == 'manager':
-            cursor.execute("SELECT * FROM ScheduledTasks")
+            cursor.execute("SELECT * FROM ScheduledTasks WHERE expected_state = 'present'")
         else:
-            cursor.execute("SELECT * FROM ScheduledTasks WHERE run_as_user = %s", (x_user,))
+            cursor.execute(
+                "SELECT * FROM ScheduledTasks WHERE run_as_user = %s AND expected_state = 'present'",
+                (x_user,),
+            )
             
         return cursor.fetchall()
+    finally:
+        cursor.close()
+        conn.close()
+
+
+class CreateTaskPayload(BaseModel):
+    task_name: str
+    cron_expression: str
+    command_to_run: str
+    run_as_user: str = "root"
+
+
+@app.post("/api/tasks")
+async def create_task(payload: CreateTaskPayload, x_user: str = Header(default="root_admin")):
+    """Create a new cron task. Managers only."""
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="Database connection failed")
+
+    cursor = conn.cursor(dictionary=True)
+    try:
+        role = get_user_role(cursor, x_user)
+        if role != 'manager':
+            raise HTTPException(status_code=403, detail="Forbidden. Managers only.")
+        
+        query = """
+            INSERT INTO ScheduledTasks (task_name, cron_expression, command_to_run, run_as_user, expected_state)
+            VALUES (%s, %s, %s, %s, %s)
+        """
+        cursor.execute(
+            query,
+            (
+                payload.task_name,
+                payload.cron_expression,
+                payload.command_to_run,
+                payload.run_as_user,
+                'present'
+            ),
+        )
+        conn.commit()
+        
+        return {"message": f"Task '{payload.task_name}' created successfully."}
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Error creating task: {e}") from e
+    finally:
+        cursor.close()
+        conn.close()
+
+@app.put("/api/tasks/{task_id}")
+async def update_task(task_id: int, payload: UpdateTaskPayload, x_user: str = Header(default="root_admin")):
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    try:
+        role = get_user_role(cursor, x_user)
+        if role != 'manager':
+            raise HTTPException(status_code=403, detail="Forbidden. Managers only.")
+        
+        query = """
+            UPDATE ScheduledTasks 
+            SET cron_expression = %s, command_to_run = %s, run_as_user = %s 
+            WHERE task_id = %s
+        """
+        cursor.execute(query, (payload.cron_expression, payload.command_to_run, payload.run_as_user, task_id))
+        conn.commit()
+        return {"message": "Task updated successfully"}
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        cursor.close()
+        conn.close()
+
+@app.delete("/api/tasks/{task_id}")
+async def delete_task(task_id: int, x_user: str = Header(default="root_admin")):
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    try:
+        role = get_user_role(cursor, x_user)
+        if role != 'manager':
+            raise HTTPException(status_code=403, detail="Forbidden. Managers only.")
+        
+        # We don't DELETE the row, we set it to 'absent' so the daemon knows to remove it from linux!
+        cursor.execute("UPDATE ScheduledTasks SET expected_state = 'absent' WHERE task_id = %s", (task_id,))
+        conn.commit()
+        return {"message": "Task marked for deletion"}
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         cursor.close()
         conn.close()
