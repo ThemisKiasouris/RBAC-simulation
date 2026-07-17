@@ -2,7 +2,7 @@ INFRA-CTRL: Infrastructure Control Plane
 
 INFRA-CTRL is a full-stack, Role-Based Access Control (RBAC) platform designed to manage and monitor a Linux server's state. It bridges the gap between a modern web dashboard and low-level Linux system administration.
 
-Instead of executing system commands directly from the web API, this platform uses an Infrastructure as Code (IaC) pattern. The React frontend writes the "desired state" to a MySQL database, and a continuously running Python background daemon reconciles the actual Linux OS to match that blueprint.
+Instead of executing system commands directly from the web API, this platform uses an Infrastructure as Code (IaC) pattern. The React frontend writes the "desired state" to a MySQL database, and a continuously running Go background daemon reconciles the actual Linux OS to match that blueprint.
 
 🚀 Key Features
 
@@ -20,11 +20,13 @@ Immutable Audit Trail: Every action taken by the daemon is logged with a timesta
 
 Frontend: React, Tailwind CSS, Recharts (for data visualization), Lucide React (for iconography).
 
-Backend: FastAPI (Python), Pydantic (data validation).
+Backend: Go, Gin (web framework).
 
 Database: MySQL 8.0 (Dockerized).
 
-System Daemon: Python subprocess library (interacting with Ubuntu/Linux native commands like useradd, userdel, crontab).
+System Daemon: Go os/exec package (interacting with Ubuntu/Linux native commands like useradd, userdel, crontab).
+
+
 
 ⚙️ Setup & Installation
 
@@ -40,13 +42,15 @@ Note: Make sure your .env file matches the credentials in docker-compose.yml (e.
 
 2. Backend API Setup
 
-Activate your virtual environment and run the FastAPI server:
+Initialize your Go module and run the API server:
 
 cd backend
-# Windows: .\.venv\Scripts\activate
-# Linux/Mac: source .venv/bin/activate
-pip install fastapi uvicorn python-dotenv mysql-connector-python pydantic
-uvicorn api:app --reload
+go mod init backend
+go get github.com/go-sql-driver/mysql
+go get github.com/joho/godotenv
+go get github.com/gin-gonic/gin
+go get github.com/gin-contrib/cors
+go run api.go db.go
 
 
 The API will be available at http://127.0.0.1:8000.
@@ -66,11 +70,13 @@ The dashboard will be available at http://localhost:3000 (or the port Vite provi
 
 To actually have the system create Linux users and manage crontabs, the daemon must be running with root privileges on the target machine.
 
+Note: To run the daemon as a standalone process, ensure you have uncommented the main function inside processor.go.
+
 cd backend
-sudo python3 Prossesor.py
+sudo go run processor.go db.go
 
 
-(In a production environment, this should be configured as a systemd service).
+(In a production environment, this should be built into a binary and configured as a systemd service).
 
 🗄️ Database Schema Summary
 
